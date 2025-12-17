@@ -23,6 +23,7 @@ export interface GameInfo {
   intro?: string;
   outro?: string;
   logoUrl?: string;
+  tasks?: any[]; // Embedded tasks from the game definition
 }
 
 export interface GameListItem {
@@ -39,11 +40,12 @@ export interface GameTask {
   type: string;
   intro?: string;
   shortIntro?: string;
+  content?: string; // Added field for v4 task definition
   points?: number;
   latitude?: number;
   longitude?: number;
   radius?: number;
-  raw?: any; // Added for debugging/inspection
+  raw?: any; 
 }
 
 export interface Question {

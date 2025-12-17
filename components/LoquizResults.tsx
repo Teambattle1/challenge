@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { PlayerResult, GameTask, GamePhoto } from '../types';
-import { fetchGameResults, fetchGameInfo, fetchGameTasks, fetchGamePhotos } from '../services/loquizService';
+import { fetchGameResults, fetchGameInfo, fetchGameTasks, fetchGamePhotos, getTaskTitle } from '../services/loquizService';
 import Podium from './Podium';
 import TaskMaster from './TaskMaster';
 import Showtime from './Showtime';
@@ -16,135 +16,100 @@ interface LoquizResultsProps {
 
 const LoquizResults: React.FC<LoquizResultsProps> = ({ apiKey, gameId, onBack }) => {
     const [results, setResults] = useState<PlayerResult[] | null>(null);
-    const [tasks, setTasks] = useState<GameTask[]>([]); // Store tasks
+    const [tasks, setTasks] = useState<GameTask[]>([]);
     const [gameName, setGameName] = useState<string | null>(null);
     const [gameLogo, setGameLogo] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [revealStep, setRevealStep] = useState(0); 
-    const [viewMode, setViewMode] = useState<'ranking' | 'taskmaster'>('ranking'); // View toggle
+    const [viewMode, setViewMode] = useState<'ranking' | 'taskmaster'>('ranking');
 
-    // Showtime State
     const [photos, setPhotos] = useState<GamePhoto[]>([]);
     const [isShowtimeOpen, setIsShowtimeOpen] = useState(false);
     const [isLoadingPhotos, setIsLoadingPhotos] = useState(false);
-
-    // Inspector State
     const [isInspectorOpen, setIsInspectorOpen] = useState(false);
 
-    // Live Event "Webhook" Simulation State
     const [liveEvent, setLiveEvent] = useState<{ message: string, subtext: string } | null>(null);
     const totalAnswerCountRef = useRef<number>(0);
     const isFirstLoadRef = useRef<boolean>(true);
 
     const loadData = useCallback(async (isRefresh = false) => {
         if (!gameId) return;
-        if (!isRefresh && viewMode === 'ranking') setIsLoading(true); 
-        setError(null);
+        if (!isRefresh && viewMode === 'ranking') setIsLoading(true);
         
         try {
-            // Fetch game info, results, AND tasks
-            const promises: Promise<any>[] = [
-                fetchGameResults(gameId, apiKey)
-            ];
+            const resultsData = await fetchGameResults(gameId, apiKey);
+            setResults(resultsData);
 
-            // Only fetch metadata on first load
-            if (!isRefresh) {
-                promises.push(fetchGameInfo(gameId, apiKey));
-                promises.push(fetchGameTasks(gameId, apiKey));
-            }
-
-            const responses = await Promise.all(promises);
-            const data = responses[0] as PlayerResult[];
-            
-            setResults(data);
-
-            // --- LIVE WEBHOOK SIMULATION ---
-            // Calculate total answers in the system
             let currentTotalAnswers = 0;
-            data.forEach(team => {
-                currentTotalAnswers += (team.answers?.length || 0);
-            });
-
-            // If not first load, and count increased, show popup
+            resultsData.forEach(team => currentTotalAnswers += (team.answers?.length || 0));
+            
             if (!isFirstLoadRef.current && currentTotalAnswers > totalAnswerCountRef.current) {
                 const diff = currentTotalAnswers - totalAnswerCountRef.current;
-                setLiveEvent({
-                    message: "INCOMING TRANSMISSION",
-                    subtext: `${diff} NEW ANSWER${diff > 1 ? 'S' : ''} RECEIVED`
-                });
-                
-                // Clear toast after 4s
+                setLiveEvent({ message: "INCOMING TRANSMISSION", subtext: `${diff} NEW ANSWER RECEIVED` });
                 setTimeout(() => setLiveEvent(null), 4000);
             }
-
             totalAnswerCountRef.current = currentTotalAnswers;
             isFirstLoadRef.current = false;
-            // ---------------------------------
 
             if (!isRefresh) {
-                const info = responses[1];
-                let taskList = responses[2] as GameTask[] || [];
-
-                // Fallback: If no tasks returned (API error or empty), generate from results
-                if (taskList.length === 0 && data && data.length > 0) {
-                     const derivedTasks = new Map<string, GameTask>();
-                     data.forEach(team => {
-                         team.answers?.forEach(ans => {
-                             if (!derivedTasks.has(ans.taskId)) {
-                                 // IMPROVED FALLBACK: Try to find a real title from raw data
-                                 const raw = ans.raw || {};
-                                 const rawQ = raw.question || {};
-                                 // Check multiple fields where title might be hiding in answer data
-                                 const derivedTitle = rawQ.title || rawQ.text || raw.title || raw.text || `Task ${ans.taskId}`;
-                                 
-                                 derivedTasks.set(ans.taskId, {
-                                     id: ans.taskId,
-                                     title: derivedTitle, 
-                                     intro: undefined,
-                                     type: raw.type || 'unknown',
-                                     raw: raw
-                                 });
-                             }
-                         });
-                     });
-                     taskList = Array.from(derivedTasks.values());
-                }
+                const [info, taskList] = await Promise.all([
+                    fetchGameInfo(gameId, apiKey),
+                    fetchGameTasks(gameId, apiKey)
+                ]);
 
                 setGameName(info.name);
                 setGameLogo(info.logoUrl || null);
-                setTasks(taskList);
-            }
+                
+                let finalTasks: GameTask[] = taskList.length > 0 ? taskList : [];
+                
+                if (finalTasks.length === 0 && info.tasks && Array.isArray(info.tasks)) {
+                   finalTasks = info.tasks.map((t: any) => ({
+                      id: t.id,
+                      title: getTaskTitle(t),
+                      type: t.type || 'v4-embedded',
+                      raw: t
+                   }));
+                }
 
-        } catch (err) {
-            console.error(err);
-            if (!isRefresh) {
-                setError(err instanceof Error ? err.message : 'An unknown error occurred.');
+                if (resultsData.length > 0) {
+                    const existingIds = new Set(finalTasks.map(t => t.id));
+                    const newSyntheticTasks: GameTask[] = [];
+                    
+                    resultsData.forEach(team => {
+                        team.answers?.forEach(ans => {
+                            if (!existingIds.has(ans.taskId)) {
+                                existingIds.add(ans.taskId);
+                                newSyntheticTasks.push({
+                                    id: ans.taskId,
+                                    title: ans.taskId,
+                                    type: 'synthetic'
+                                });
+                            }
+                        });
+                    });
+                    
+                    finalTasks = [...finalTasks, ...newSyntheticTasks];
+                }
+
+                setTasks(finalTasks);
             }
+        } catch (err) {
+            console.warn("Sync error:", err);
+            if (!isRefresh) setError(err instanceof Error ? err.message : 'Error syncing data');
         } finally {
             if (!isRefresh) setIsLoading(false);
         }
-    }, [gameId, apiKey]);
+    }, [gameId, apiKey, viewMode]);
 
     useEffect(() => {
         loadData();
-        const intervalId = setInterval(() => {
-            loadData(true);
-        }, 10000);
+        const intervalId = setInterval(() => loadData(true), 15000);
         return () => clearInterval(intervalId);
     }, [loadData]);
 
-    const handleRefresh = () => {
-        loadData(true);
-    };
-
-    const handleNextReveal = () => {
-        setRevealStep(prev => Math.min(prev + 1, 3));
-    };
-
     const handleShowtimeClick = async () => {
         setIsShowtimeOpen(true);
-        // Always try to fetch fresh photos when opening
         if (photos.length === 0) {
             setIsLoadingPhotos(true);
             const fetchedPhotos = await fetchGamePhotos(gameId, apiKey);
@@ -153,239 +118,154 @@ const LoquizResults: React.FC<LoquizResultsProps> = ({ apiKey, gameId, onBack })
         }
     };
 
-    if (isLoading) {
-        return (
-            <div className="flex flex-col items-center justify-center text-center h-64">
-                <div className="w-16 h-16 border-4 border-orange-500 border-t-white rounded-full animate-spin mb-6"></div>
-                <p className="text-white/80 text-xl font-bold tracking-wider uppercase">Loading Battle Data...</p>
-            </div>
-        );
-    }
+    if (isLoading) return (
+        <div className="flex flex-col items-center justify-center text-center h-64">
+            <div className="w-16 h-16 border-4 border-orange-500 border-t-white rounded-full animate-spin mb-6"></div>
+            <p className="text-white/80 text-xl font-bold tracking-wider uppercase">Connecting to Satellite...</p>
+        </div>
+    );
     
-    if (error) {
-        return (
-            <div className="w-full max-w-md text-center glass-panel p-8 rounded-2xl shadow-2xl border border-red-500/30">
-                <div className="mx-auto w-16 h-16 bg-red-900/50 rounded-full flex items-center justify-center mb-4 border border-red-500">
-                    <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                </div>
-                <h2 className="text-2xl font-bold text-red-400 mb-2 uppercase">System Error</h2>
-                <p className="text-gray-400 mb-6">{error}</p>
-                 <button onClick={onBack} className="px-6 py-3 bg-zinc-800 text-white font-semibold rounded-lg hover:bg-zinc-700 border border-zinc-600 transition-colors uppercase tracking-wider">
-                    Back to Lobby
-                </button>
+    if (error) return (
+        <div className="w-full max-w-md text-center glass-panel p-8 rounded-2xl border border-red-500/30 mx-auto">
+            <h2 className="text-2xl font-bold text-red-400 mb-2 uppercase">Sync Error</h2>
+            <p className="text-gray-400 mb-6">{error}</p>
+            <div className="flex flex-col gap-3">
+                <button onClick={() => { setError(null); loadData(); }} className="px-6 py-3 bg-orange-600 text-black rounded-lg hover:bg-orange-500 transition-all uppercase tracking-widest text-xs font-bold">Retry Connection</button>
+                <button onClick={onBack} className="px-6 py-3 bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 transition-colors uppercase tracking-widest text-xs font-bold border border-zinc-700">Abort to Lobby</button>
             </div>
-        );
-    }
+        </div>
+    );
 
-    if (!results) return null;
-
-    const topThree = results.slice(0, 3);
-    const restOfTeams = results.slice(3);
-
-    const getButtonText = () => {
-        switch(revealStep) {
-            case 0: return "Reveal 3rd Place";
-            case 1: return "Reveal 2nd Place";
-            case 2: return "Reveal Winner";
-            default: return "";
-        }
-    };
+    if (!results || results.length === 0) return (
+        <div className="w-full flex flex-col items-center pt-32 px-4 animate-fade-in">
+             <div className="fixed top-8 left-8 z-50">
+                    <button onClick={onBack} className="p-3 bg-black/60 hover:bg-orange-600 text-orange-500 hover:text-white rounded-full transition-all border border-orange-500/30 shadow-2xl">
+                        <HouseIcon className="w-6 h-6 md:w-8 md:h-8" />
+                    </button>
+            </div>
+            <div className="text-center glass-panel p-12 rounded-3xl border border-white/5 max-w-2xl">
+                <div className="text-6xl mb-6">🛰️</div>
+                <h1 className="text-4xl font-black text-white uppercase mb-4 tracking-tighter">No Active Signals</h1>
+                <p className="text-zinc-500 font-bold uppercase tracking-widest text-sm mb-8">This game code exists, but no scores or team results were found on the server.</p>
+                <div className="flex flex-col items-center gap-4">
+                    <button onClick={handleShowtimeClick} className="px-8 py-3 bg-pink-600 text-white font-black rounded-full uppercase tracking-widest text-xs hover:bg-pink-500 transition-all shadow-[0_0_20px_rgba(219,39,119,0.4)]">Check Media Gallery Anyway</button>
+                    <button onClick={() => loadData(true)} className="text-orange-500 hover:text-orange-400 font-bold uppercase text-xs tracking-widest mt-4">Force Refresh Signal</button>
+                    <button onClick={onBack} className="text-zinc-600 hover:text-zinc-400 font-bold uppercase text-[10px] tracking-[0.3em] mt-2">Return to Base</button>
+                </div>
+            </div>
+            {isShowtimeOpen && (
+                isLoadingPhotos ? (
+                    <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center backdrop-blur-2xl">
+                        <div className="w-20 h-20 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mb-8"></div>
+                        <p className="text-pink-500 font-black uppercase tracking-[0.4em] text-2xl animate-pulse">Syncing Media...</p>
+                    </div>
+                ) : <Showtime photos={photos} onClose={() => setIsShowtimeOpen(false)} />
+            )}
+        </div>
+    );
 
     return (
-        <div className="w-full max-w-full px-2 md:px-4 flex flex-col items-center relative z-10 h-full">
-            
-            {/* Live Notification Toast */}
+        <div className="w-full max-w-full px-2 md:px-4 flex flex-col items-center relative z-10 h-full pt-20 md:pt-32 lg:pt-40">
             {liveEvent && <LiveToast message={liveEvent.message} subtext={liveEvent.subtext} />}
 
-            {/* Header Section - Super Compact */}
-            <div className="w-full text-center mb-1 relative px-4 mt-2">
-                 {/* Top Left House Icon */}
-                 <div className="absolute top-0 left-0 z-20">
-                    <button 
-                        onClick={onBack}
-                        className="p-1.5 md:p-2 bg-black/40 hover:bg-orange-600 text-orange-500 hover:text-white rounded-full transition-all backdrop-blur-sm border border-orange-500/30 shadow-[0_0_15px_rgba(234,88,12,0.3)] hover:shadow-[0_0_20px_rgba(234,88,12,0.6)]"
-                        title="Back to Lobby"
-                    >
-                        <HouseIcon className="w-5 h-5 md:w-6 md:h-6" />
+            <div className="w-full text-center mb-10 relative px-4">
+                <div className="fixed top-8 left-8 z-50">
+                    <button onClick={onBack} className="p-3 bg-black/60 hover:bg-orange-600 text-orange-500 hover:text-white rounded-full transition-all border border-orange-500/30 shadow-2xl">
+                        <HouseIcon className="w-6 h-6 md:w-8 md:h-8" />
                     </button>
                 </div>
 
-                 {/* Top Right: Controls */}
-                 <div className="absolute top-0 right-0 z-20 flex gap-2">
-                    {/* Inspector Button (Debug) */}
-                    <button
-                        onClick={() => setIsInspectorOpen(true)}
-                        className="hidden md:block px-2 py-1.5 md:px-3 md:py-2 rounded-full font-black text-[9px] md:text-[10px] uppercase tracking-widest transition-all backdrop-blur-sm border bg-black/40 text-blue-400 border-blue-500/30 hover:bg-blue-500/20"
-                    >
-                        Inspector
-                    </button>
-
-                    {/* Showtime Button */}
-                    <button
-                        onClick={handleShowtimeClick}
-                        className="px-3 py-1.5 md:px-4 md:py-2 rounded-full font-black text-[10px] md:text-xs uppercase tracking-widest transition-all backdrop-blur-sm border bg-black/40 text-pink-500 border-pink-500/50 hover:bg-pink-500/20 shadow-[0_0_10px_rgba(236,72,153,0.3)]"
-                    >
-                        Showtime
-                    </button>
-
-                    {/* TaskMaster Button */}
-                    <button 
-                        onClick={() => setViewMode(prev => prev === 'ranking' ? 'taskmaster' : 'ranking')}
-                        className={`
-                            px-3 py-1.5 md:px-4 md:py-2 rounded-full font-black text-[10px] md:text-xs uppercase tracking-widest transition-all backdrop-blur-sm border
-                            ${viewMode === 'taskmaster' 
-                                ? 'bg-orange-500 text-black border-orange-400 shadow-[0_0_15px_rgba(234,88,12,0.6)]' 
-                                : 'bg-black/40 text-zinc-400 border-zinc-700 hover:text-orange-400 hover:border-orange-500/50'}
-                        `}
-                    >
-                        {viewMode === 'ranking' ? 'TaskMaster' : 'Ranking'}
-                    </button>
-
-                    {/* Refresh Button */}
-                    <button 
-                        onClick={handleRefresh}
-                        className="p-1.5 md:p-2 bg-black/40 hover:bg-orange-500/20 text-orange-400 hover:text-orange-300 rounded-full transition-all backdrop-blur-sm border border-orange-500/30"
-                        title="Refresh Data"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                    </button>
-                </div>
-
-                {/* Main Title Area */}
-                <div className="flex flex-col items-center justify-center">
-                    {/* Client Logo - Larger */}
+                <div className="flex flex-col items-center justify-center mb-10">
                     {gameLogo && (
-                        <div className="mb-2">
-                            <img 
-                                src={gameLogo} 
-                                alt={`${gameName} Logo`} 
-                                className="h-24 md:h-40 object-contain filter drop-shadow-[0_0_15px_rgba(255,255,255,0.1)] hover:scale-105 transition-transform duration-500" 
-                            />
+                        <div className="mb-12 animate-fade-in">
+                            <img src={gameLogo} alt="Logo" className="h-44 md:h-64 lg:h-80 object-contain drop-shadow-[0_0_30px_rgba(255,255,255,0.2)] hover:scale-105 transition-transform duration-700" />
                         </div>
                     )}
                     
-                    {/* TEAMCHALLENGE Title - White and Compact */}
-                    <h1 className="text-xl md:text-3xl font-black text-white mb-0 uppercase tracking-tighter drop-shadow-sm filter">
-                        TEAMCHALLENGE
-                    </h1>
+                    <div className="flex flex-wrap justify-center items-center gap-4 mb-10 bg-black/40 p-2.5 rounded-full border border-white/10 shadow-2xl backdrop-blur-md">
+                        <button onClick={() => setIsInspectorOpen(true)} className="hidden md:block px-5 py-2.5 rounded-full font-black text-[11px] uppercase tracking-widest text-blue-400 border border-blue-500/30 hover:bg-blue-500/20">
+                            Inspector
+                        </button>
+                        <button onClick={handleShowtimeClick} className="px-6 py-2.5 md:px-8 md:py-3 rounded-full font-black text-[11px] md:text-xs uppercase tracking-widest transition-all bg-pink-500/10 text-pink-500 border border-pink-500/30 hover:bg-pink-500 hover:text-white shadow-[0_0_20px_rgba(236,72,153,0.3)]">
+                            Showtime
+                        </button>
+                        <button onClick={() => setViewMode(prev => prev === 'ranking' ? 'taskmaster' : 'ranking')} className={`px-6 py-2.5 md:px-8 md:py-3 rounded-full font-black text-[11px] md:text-xs uppercase tracking-widest transition-all border ${viewMode === 'taskmaster' ? 'bg-orange-500 text-black border-orange-400 shadow-[0_0_25px_rgba(234,88,12,0.5)]' : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-orange-400'}`}>
+                            {viewMode === 'ranking' ? 'TaskMaster' : 'Ranking'}
+                        </button>
+                        <button onClick={() => loadData(true)} className="p-2.5 md:p-3 bg-zinc-800 text-orange-400 hover:text-orange-300 rounded-full border border-zinc-700 shadow-xl">
+                            <svg className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                        </button>
+                    </div>
 
-                    {/* Game Name - Smaller and Orange */}
-                    <div className="flex flex-col md:flex-row items-center gap-2 mt-0.5">
-                        {gameName && (
-                            <span className="text-[10px] md:text-xs text-orange-500 font-bold uppercase tracking-wide opacity-100 drop-shadow-md">
-                                {gameName}
-                            </span>
-                        )}
-                        <span className="hidden md:inline text-zinc-700 text-[10px]">|</span>
-                        <span className="text-zinc-600 font-bold tracking-[0.2em] text-[8px] md:text-[9px] uppercase">by TeamBattle</span>
+                    <h1 className="text-4xl md:text-7xl font-black text-white mb-2 uppercase tracking-tighter drop-shadow-2xl">TEAMCHALLENGE</h1>
+                    <div className="flex flex-col md:flex-row items-center gap-4 mt-2">
+                        {gameName && <span className="text-base md:text-xl text-orange-500 font-black uppercase tracking-[0.3em] drop-shadow-md">{gameName}</span>}
+                        <span className="hidden md:inline text-zinc-800 text-xl">|</span>
+                        <span className="text-zinc-600 font-bold tracking-[0.6em] text-[10px] md:text-xs uppercase">Official Terminal</span>
                     </div>
                 </div>
             </div>
 
-            {/* CONDITIONAL CONTENT */}
             {viewMode === 'ranking' ? (
                 <>
-                    {/* Podium Section - Compact Height */}
-                    <div className="w-full mb-2 relative">
-                         {/* Reveal Controls */}
+                    <div className="w-full mb-10 relative">
                          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-30 w-full flex justify-center pointer-events-none">
                              {revealStep < 3 && (
-                                <button 
-                                    onClick={handleNextReveal} 
-                                    className="pointer-events-auto mt-20 md:mt-24 px-6 py-2 bg-gradient-to-r from-orange-600 to-red-600 text-white text-base font-black rounded-full shadow-[0_0_30px_rgba(234,88,12,0.6)] hover:scale-110 transition-all duration-300 border-2 border-orange-400 uppercase tracking-widest"
-                                >
-                                    {getButtonText()}
+                                <button onClick={() => setRevealStep(prev => prev + 1)} className="pointer-events-auto mt-28 md:mt-36 px-12 py-5 bg-gradient-to-r from-orange-600 to-red-700 text-white text-xl md:text-2xl font-black rounded-full shadow-[0_0_50px_rgba(234,88,12,0.6)] hover:scale-110 transition-all border-2 border-orange-400 uppercase tracking-widest">
+                                    {revealStep === 0 ? "Reveal 3rd Place" : revealStep === 1 ? "Reveal 2nd Place" : "Reveal Winner"}
                                 </button>
                              )}
                          </div>
-
-                        <Podium topThree={topThree} revealStep={revealStep} />
+                        <Podium topThree={results.slice(0, 3)} revealStep={revealStep} />
                     </div>
 
-                    {/* The List - Compact Row Padding */}
-                    <div className="w-full max-w-7xl glass-panel rounded-xl overflow-hidden border-t-4 border-t-orange-500 flex flex-col mb-4">
-                        <div className="bg-black/40 px-4 py-2 border-b border-white/5 flex justify-between items-center">
-                            <h3 className="text-lg md:text-xl font-black text-white uppercase tracking-wider">Ranking List</h3>
-                            <div className="flex items-center gap-2">
-                                 <div className="w-2 h-2 rounded-full bg-orange-500"></div>
-                                 <span className="text-[10px] font-mono text-orange-400 uppercase tracking-widest">Live</span>
-                            </div>
+                    <div className="w-full max-w-7xl glass-panel rounded-3xl overflow-hidden border-t-8 border-t-orange-600 flex flex-col mb-16 shadow-[0_30px_60px_rgba(0,0,0,0.6)]">
+                        <div className="bg-black/60 px-8 py-5 border-b border-white/10 flex justify-between items-center">
+                            <h3 className="text-2xl md:text-3xl font-black text-white uppercase tracking-wider">Combat Log: Rankings</h3>
                         </div>
-                        
-                        <div className="overflow-x-auto max-h-[500px] overflow-y-auto scrollbar-thin scrollbar-thumb-orange-600 scrollbar-track-zinc-900">
+                        <div className="overflow-x-auto max-h-[700px] overflow-y-auto scrollbar-thin scrollbar-thumb-orange-600 scrollbar-track-zinc-950">
                             <table className="min-w-full relative border-collapse text-left">
-                                <thead className="bg-zinc-900/90 text-zinc-500 text-xs uppercase font-black tracking-wider sticky top-0 backdrop-blur-md z-10">
+                                <thead className="bg-zinc-950 text-zinc-500 text-[10px] md:text-xs uppercase font-black tracking-widest sticky top-0 border-b border-white/5 z-10">
                                     <tr>
-                                        <th className="px-6 py-3">Rank</th>
-                                        <th className="px-4 py-3">Team Name</th>
-                                        <th className="px-4 py-3 text-right">Score</th>
-                                        <th className="px-4 py-3 text-center hidden md:table-cell">Accuracy</th>
+                                        <th className="px-12 py-6">Rank</th>
+                                        <th className="px-8 py-6">Unit Designation</th>
+                                        <th className="px-8 py-6 text-right">Battle Score</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-zinc-800">
-                                    {restOfTeams.map((player) => (
-                                        <tr key={player.position} className="hover:bg-white/5 transition-colors group uppercase">
-                                            <td className="px-6 py-2 md:py-3 font-black text-2xl md:text-3xl text-orange-500 drop-shadow-md">
-                                                #{player.position}
-                                            </td>
-                                            <td className="px-4 py-2 md:py-3">
+                                <tbody className="divide-y divide-zinc-900">
+                                    {results.slice(3).map((player) => (
+                                        <tr key={player.position} className="hover:bg-white/[0.04] transition-all group uppercase">
+                                            <td className="px-12 py-6 md:py-8 font-black text-4xl md:text-6xl text-orange-500/80">#{player.position}</td>
+                                            <td className="px-8 py-6 md:py-8">
                                                 <div className="flex items-center">
-                                                    <div 
-                                                        className="w-1.5 h-6 md:h-8 mr-4 rounded-sm shadow-[0_0_8px_currentColor]" 
-                                                        style={{ backgroundColor: player.color || '#555', color: player.color || '#555' }}
-                                                    />
-                                                    <span className="font-bold text-zinc-200 text-base md:text-xl tracking-tight group-hover:text-white group-hover:tracking-wide transition-all duration-300">
-                                                        {player.name}
-                                                    </span>
+                                                    <div className="w-2.5 h-12 md:h-16 mr-8 rounded-sm" style={{ backgroundColor: player.color || '#555' }} />
+                                                    <span className="font-black text-zinc-100 text-2xl md:text-4xl tracking-tighter">{player.name}</span>
                                                 </div>
                                             </td>
-                                            <td className="px-4 py-2 md:py-3 text-right font-mono font-black text-white text-xl md:text-2xl tracking-tighter">
-                                                {player.score.toLocaleString()}
-                                            </td>
-                                            <td className="px-4 py-2 md:py-3 text-center hidden md:table-cell text-zinc-500 text-sm md:text-base font-bold">
-                                                <span className="text-green-500">{player.correctAnswers || 0}</span>
-                                                <span className="mx-1 text-zinc-700">/</span>
-                                                <span className="text-red-500">{player.incorrectAnswers || 0}</span>
-                                            </td>
+                                            <td className="px-8 py-6 md:py-8 text-right font-mono font-black text-white text-3xl md:text-5xl">{player.score.toLocaleString()}</td>
                                         </tr>
                                     ))}
-                                     {restOfTeams.length === 0 && (
-                                        <tr>
-                                            <td colSpan={4} className="px-6 py-8 text-center text-zinc-600 italic text-lg uppercase">
-                                                {results.length <= 3 ? "All teams have conquered the podium!" : "No other teams found."}
-                                            </td>
-                                        </tr>
-                                    )}
                                 </tbody>
                             </table>
                         </div>
                     </div>
                 </>
             ) : (
-                // TASK MASTER VIEW
-                <div className="w-full max-w-[95vw] h-[70vh] glass-panel rounded-xl overflow-hidden border-t-4 border-t-orange-500 flex flex-col mb-4 animate-fade-in">
+                <div className="w-full max-w-[98vw] h-[80vh] glass-panel rounded-3xl overflow-hidden border-t-8 border-t-orange-600 flex flex-col mb-16 shadow-[0_40px_80px_rgba(0,0,0,0.7)]">
                     <TaskMaster tasks={tasks} results={results} />
                 </div>
             )}
 
-            {/* SHOWTIME MODAL */}
             {isShowtimeOpen && (
-                isLoadingPhotos && photos.length === 0 ? (
-                    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center">
-                        <div className="w-12 h-12 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                        <p className="text-pink-500 font-bold uppercase tracking-widest animate-pulse">Scanning Media Streams...</p>
+                isLoadingPhotos ? (
+                    <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center backdrop-blur-2xl">
+                        <div className="w-20 h-20 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mb-8"></div>
+                        <p className="text-pink-500 font-black uppercase tracking-[0.4em] text-2xl animate-pulse">Syncing Media...</p>
                     </div>
-                ) : (
-                    <Showtime photos={photos} onClose={() => setIsShowtimeOpen(false)} />
-                )
+                ) : <Showtime photos={photos} onClose={() => setIsShowtimeOpen(false)} />
             )}
 
-            {/* INSPECTOR MODAL */}
-            {isInspectorOpen && (
-                <TaskInspector tasks={tasks} results={results || []} onClose={() => setIsInspectorOpen(false)} />
-            )}
+            {isInspectorOpen && <TaskInspector tasks={tasks} results={results} onClose={() => setIsInspectorOpen(false)} />}
         </div>
     );
 };

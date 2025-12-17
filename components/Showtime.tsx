@@ -2,24 +2,28 @@ import React, { useState, useEffect } from 'react';
 import { GamePhoto } from '../types';
 
 interface ShowtimeProps {
-    photos: GamePhoto[];
-    onClose: () => void;
+  photos: GamePhoto[];
+  onClose: () => void;
 }
 
-const Showtime: React.FC<ShowtimeProps> = ({ photos, onClose }) => {
+const Showtime = ({ photos, onClose }: ShowtimeProps) => {
     const [view, setView] = useState<'grid' | 'slideshow'>('grid');
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isPlaying, setIsPlaying] = useState(true);
 
-    // Auto-play effect for slideshow
+    // Auto-play effect for slideshow with proper interval typing and cleanup
     useEffect(() => {
-        let interval: ReturnType<typeof setInterval>;
+        let interval: ReturnType<typeof setInterval> | undefined;
+
         if (view === 'slideshow' && isPlaying && photos.length > 0) {
             interval = setInterval(() => {
                 setCurrentIndex(prev => (prev + 1) % photos.length);
-            }, 5000); // 5 seconds per slide
+            }, 5000);
         }
-        return () => clearInterval(interval);
+
+        return () => {
+            if (interval) clearInterval(interval);
+        };
     }, [isPlaying, view, photos.length]);
 
     // Handle keyboard navigation
@@ -40,7 +44,7 @@ const Showtime: React.FC<ShowtimeProps> = ({ photos, onClose }) => {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [view, photos.length]);
+    }, [view, photos.length, onClose]);
 
     const nextSlide = () => {
         setCurrentIndex(prev => (prev + 1) % photos.length);

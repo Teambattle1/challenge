@@ -1,5 +1,5 @@
 {
-  "name": "2026 Loquiz Results Viewer",
+  "name": "2026 Loquiz Results",
   "description": "An application to display game results and rankings from Loquiz. Enter a Game ID to see a celebratory reveal of the winners and the full leaderboard.",
   "requestFramePermissions": []
 }

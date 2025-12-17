@@ -24,12 +24,11 @@ const quizSchema = {
   },
 };
 
+/**
+ * Generates a multiple-choice quiz about a specified location using Gemini 3 Flash.
+ */
 export const generateLocationQuiz = async (location: string): Promise<Question[]> => {
-  // Always initialize client using the strict named parameter from process.env.API_KEY
-  if (!process.env.API_KEY) {
-    throw new Error("Gemini API Key is missing in environment variables.");
-  }
-
+  // Initialize the GoogleGenAI client using process.env.API_KEY directly.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   try {
@@ -37,6 +36,7 @@ export const generateLocationQuiz = async (location: string): Promise<Question[]
     The questions should be interesting and cover topics like history, landmarks, culture, and fun facts. 
     Each question must have exactly 4 plausible options, with only one being correct.`;
 
+    // Use gemini-3-flash-preview for basic text tasks like quiz generation.
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
@@ -46,6 +46,7 @@ export const generateLocationQuiz = async (location: string): Promise<Question[]
       },
     });
     
+    // Access the text property directly (not as a method).
     const jsonText = response.text;
     if (!jsonText) {
       throw new Error("AI returned empty content");

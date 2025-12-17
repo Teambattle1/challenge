@@ -3,7 +3,7 @@ import LoquizResults from './components/LoquizResults';
 import GameListPage from './components/GameListPage';
 import ApiKeyInput from './components/ApiKeyInput';
 
-// Explicitly define views for better type safety and to prevent 'string vs ViewState' issues
+// Define the exact allowed view states
 type ViewState = 'login' | 'lobby' | 'results';
 
 // PASTE YOUR API KEY HERE - Leave empty to use manual input
@@ -20,8 +20,22 @@ const App: React.FC = () => {
     return localStorage.getItem('loquiz_api_key') || null;
   });
 
-  // Calculate the current view based on state
-  const currentView: ViewState = !apiKey ? 'login' : (selectedGameId ? 'results' : 'lobby');
+  // Use explicit typing for the state to satisfy TS
+  const [currentView, setCurrentView] = useState<ViewState>(() => {
+    const initialKey = HARDCODED_API_KEY || localStorage.getItem('loquiz_api_key');
+    return !initialKey ? 'login' : 'lobby';
+  });
+
+  // Sync currentView when state changes
+  useEffect(() => {
+    if (!apiKey) {
+      setCurrentView('login');
+    } else if (selectedGameId) {
+      setCurrentView('results');
+    } else {
+      setCurrentView('lobby');
+    }
+  }, [apiKey, selectedGameId]);
 
   const viewResults = (gameId: string) => {
     setSelectedGameId(gameId);
@@ -32,9 +46,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
-    // Prevent logout if using a hardcoded key as it would immediately log back in
     if (HARDCODED_API_KEY && HARDCODED_API_KEY.trim() !== "") return;
-    
     localStorage.removeItem('loquiz_api_key');
     setApiKey(null);
     setSelectedGameId(null);
