@@ -5,6 +5,7 @@ import { fetchGames } from '../services/loquizService';
 interface GameListPageProps {
   apiKey: string;
   onGameSelect: (gameId: string) => void;
+  onLogout?: () => void;
 }
 
 type TabType = 'today' | 'planned' | 'completed';
@@ -16,7 +17,6 @@ const parseGameDate = (rawValue: string | number | undefined): Date | null => {
 
     // Handle numeric timestamp
     if (typeof rawValue === 'number') {
-        // Heuristic: If num is small (e.g., < 3000000000), it's seconds.
         if (rawValue < 100000000000) {
              d = new Date(rawValue * 1000);
         } else {
@@ -35,26 +35,21 @@ const parseGameDate = (rawValue: string | number | undefined): Date | null => {
     // Handle formatted string date
     else if (typeof rawValue === 'string') {
         const cleanVal = rawValue.trim();
-        
-        // Try EU format DD-MM-YYYY or DD.MM.YYYY
         const euDateRegex = /^(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})(?:\s.*)?$/;
         const euMatch = cleanVal.match(euDateRegex);
 
         if (euMatch) {
             const day = parseInt(euMatch[1], 10);
-            const month = parseInt(euMatch[2], 10) - 1; // Month is 0-indexed
+            const month = parseInt(euMatch[2], 10) - 1; 
             let year = parseInt(euMatch[3], 10);
             if (year < 100) year += 2000;
             d = new Date(year, month, day);
         } else {
-             // Try standard ISO or SQL format
-             // Replace space with T for SQL format compatibility
             const iso = cleanVal.replace(' ', 'T');
             const temp = new Date(iso);
             if (!isNaN(temp.getTime())) {
                 d = temp;
             } else {
-                // Last ditch attempt with original string
                 const original = new Date(cleanVal);
                 if (!isNaN(original.getTime())) d = original;
             }
@@ -67,7 +62,7 @@ const parseGameDate = (rawValue: string | number | undefined): Date | null => {
     return null;
 };
 
-const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => {
+const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect, onLogout }) => {
   const [games, setGames] = useState<GameListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -77,8 +72,16 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
 
   useEffect(() => {
     const loadGames = async () => {
+      // In Guest mode, skip fetch and show manual input
+      if (apiKey === 'GUEST' || apiKey === 'SKIP') {
+          setIsLoading(false);
+          setTimeout(() => manualInputRef.current?.focus(), 100);
+          return;
+      }
+
       try {
         setListError(null);
+        setIsLoading(true);
         const gameList = await fetchGames(apiKey);
         setGames(gameList);
       } catch (err: any) {
@@ -104,7 +107,6 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
     if (manualGameId.trim()) onGameSelect(manualGameId.trim());
   };
 
-  // Group games into Today, Planned, Completed
   const getGroupedGames = () => {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
@@ -122,7 +124,6 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
           const statusStr = String(game.status || '').toLowerCase();
           const isClosed = statusStr === 'closed' || statusStr === 'ended' || statusStr === 'archived' || game.isPlayable === false;
           
-          // Explicitly closed games always go to Completed
           if (isClosed) {
               grouped.completed.push(game);
               return;
@@ -131,8 +132,6 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
           const date = parseGameDate(game.created);
           
           if (!date) {
-              // CHANGE: If date is missing/invalid, assume it's an old game and move to Completed.
-              // Previously fell back to 'today', causing clutter.
               grouped.completed.push(game);
               return;
           }
@@ -140,23 +139,16 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
           const time = date.getTime();
 
           if (time < todayStart.getTime()) {
-              // Past dates -> Completed
               grouped.completed.push(game);
           } else if (time > todayEnd.getTime()) {
-              // Future dates -> Planned
               grouped.planned.push(game);
           } else {
-              // Strictly within today -> Today
               grouped.today.push(game);
           }
       });
 
-      // Sort logic
-      // Today: Chronological (earliest first)
       grouped.today.sort((a, b) => (parseGameDate(a.created)?.getTime() || 0) - (parseGameDate(b.created)?.getTime() || 0));
-      // Planned: Chronological (soonest first)
       grouped.planned.sort((a, b) => (parseGameDate(a.created)?.getTime() || 0) - (parseGameDate(b.created)?.getTime() || 0));
-      // Completed: Reverse Chronological (newest finished first)
       grouped.completed.sort((a, b) => (parseGameDate(b.created)?.getTime() || 0) - (parseGameDate(a.created)?.getTime() || 0));
 
       return grouped;
@@ -177,12 +169,10 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
               {count} Games
           </span>
           
-          {/* Active Indicator Line */}
           {activeTab === tab && (
               <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-orange-600 via-yellow-500 to-orange-600 shadow-[0_0_15px_rgba(245,158,11,0.5)]"></div>
           )}
           
-          {/* Background Highlight for Active */}
           {activeTab === tab && (
               <div className="absolute inset-0 bg-gradient-to-t from-orange-500/10 to-transparent opacity-100"></div>
           )}
@@ -191,14 +181,24 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
 
   return (
     <div className="w-full max-w-6xl flex flex-col items-center min-h-[85vh]">
-      <div className="text-center mb-6">
+      <div className="text-center mb-6 relative w-full">
+        {/* Logout/Login Button - Only shown if onLogout is provided */}
+        {onLogout && (
+             <button 
+                onClick={onLogout}
+                className="absolute top-0 right-0 text-[9px] uppercase font-bold text-zinc-600 hover:text-orange-500 border border-zinc-800 hover:border-orange-500 px-2 py-1 rounded transition-colors"
+             >
+                {apiKey === 'GUEST' ? 'Login' : 'Logout'}
+             </button>
+        )}
+        
         <h1 className="text-4xl md:text-6xl font-black text-orange-500 mb-2 tracking-tighter uppercase drop-shadow-sm filter">
             TEAMCHALLENGE
         </h1>
         <p className="text-zinc-500 font-bold tracking-[0.4em] text-[10px] md:text-xs uppercase">Select your battleground</p>
       </div>
       
-      {listError && !isLoading && (
+      {listError && !isLoading && apiKey !== 'GUEST' && (
           <div className="w-full max-w-md bg-red-900/20 border border-red-500/50 p-4 mb-6 rounded text-red-300 text-sm flex items-center">
              <span className="mr-2 text-xl">!</span> {listError}
           </div>
@@ -210,7 +210,7 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
             <p className="text-zinc-500 uppercase tracking-widest text-xs animate-pulse">Scanning...</p>
         </div>
       ) : (
-         !listError && (
+         (!listError || games.length > 0) && (
              <div className="w-full max-w-4xl flex flex-col flex-grow">
                  {/* Tabs */}
                  <div className="flex border-b border-zinc-800 bg-zinc-900/30 rounded-t-xl overflow-hidden mb-0">
@@ -259,7 +259,6 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
                                             </div>
                                         </div>
                                         
-                                        {/* Status / Action Indicator */}
                                         <div className="ml-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-4 group-hover:translate-x-0">
                                             {isCompletedTab ? (
                                                 <span className="text-zinc-500 font-bold text-xs uppercase tracking-wider border border-zinc-700 px-2 py-1 rounded">View Results</span>
@@ -281,6 +280,9 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
                                 {activeTab === 'today' ? '📅' : activeTab === 'planned' ? '🚀' : '🏁'}
                             </div>
                             <p className="text-lg font-medium italic">No games found in {activeTab}</p>
+                            {activeTab === 'completed' && games.length === 0 && (
+                                <p className="text-xs text-zinc-500 mt-2">(If you are missing games, check if you are logged in as Guest)</p>
+                            )}
                         </div>
                      )}
                  </div>
@@ -290,9 +292,11 @@ const GameListPage: React.FC<GameListPageProps> = ({ apiKey, onGameSelect }) => 
 
       {/* Footer / Manual Input Section */}
       <div className="w-full mt-auto pt-6 flex flex-col items-center">
-          <div className="w-full max-w-lg opacity-60 hover:opacity-100 transition-opacity duration-300">
+          <div className="w-full max-w-lg opacity-80 hover:opacity-100 transition-opacity duration-300">
              <div className="bg-zinc-900/30 p-4 rounded-xl border border-zinc-800 backdrop-blur-sm flex items-center gap-3">
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest whitespace-nowrap">Or enter ID:</span>
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest whitespace-nowrap">
+                    {apiKey === 'GUEST' ? 'Enter Game ID:' : 'Or enter ID:'}
+                </span>
                 <form onSubmit={handleManualSubmit} className="flex-grow flex gap-2">
                   <input
                     ref={manualInputRef}

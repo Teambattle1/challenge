@@ -1,11 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Question } from '../types';
 
-// The immediate check for process.env.API_KEY was causing a startup crash.
-// This has been modified to initialize `ai` conditionally, preventing the crash
-// while preserving the file's functionality if it were to be used later.
-const ai = process.env.API_KEY ? new GoogleGenAI({ apiKey: process.env.API_KEY }) : null;
-
 const quizSchema = {
   type: Type.ARRAY,
   items: {
@@ -30,10 +25,12 @@ const quizSchema = {
 };
 
 export const generateLocationQuiz = async (location: string): Promise<Question[]> => {
-  if (!ai) {
-    console.error("Gemini API key not configured. Cannot generate quiz.");
-    throw new Error("The Gemini AI service is not configured.");
+  // Always initialize client using the strict named parameter from process.env.API_KEY
+  if (!process.env.API_KEY) {
+    throw new Error("Gemini API Key is missing in environment variables.");
   }
+
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   try {
     const prompt = `Generate a 10-question multiple-choice quiz about the location: ${location}. 
@@ -41,7 +38,7 @@ export const generateLocationQuiz = async (location: string): Promise<Question[]
     Each question must have exactly 4 plausible options, with only one being correct.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -51,20 +48,14 @@ export const generateLocationQuiz = async (location: string): Promise<Question[]
     
     const jsonText = response.text;
     if (!jsonText) {
-      throw new Error("No content generated");
+      throw new Error("AI returned empty content");
     }
 
     const quizData = JSON.parse(jsonText.trim()) as Question[];
 
-    // Basic validation
     if (!Array.isArray(quizData) || quizData.length === 0) {
       throw new Error("AI returned invalid quiz data format.");
     }
-    quizData.forEach(q => {
-        if (!q.questionText || !Array.isArray(q.options) || q.options.length !== 4 || typeof q.correctAnswerIndex !== 'number') {
-           throw new Error("Invalid question structure in AI response.");
-        }
-    });
 
     return quizData;
   } catch (error) {

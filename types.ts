@@ -3,6 +3,7 @@ export interface PlayerAnswer {
   taskId: string;
   isCorrect?: boolean;
   score?: number;
+  raw?: any; // Store full raw answer object for debugging/inspection
 }
 
 export interface PlayerResult {
@@ -37,14 +38,25 @@ export interface GameTask {
   title: string;
   type: string;
   intro?: string;
+  shortIntro?: string;
   points?: number;
   latitude?: number;
   longitude?: number;
   radius?: number;
+  raw?: any; // Added for debugging/inspection
 }
 
 export interface Question {
   questionText: string;
   options: string[];
   correctAnswerIndex: number;
+}
+
+export interface GamePhoto {
+  id: string;
+  url: string;
+  thumbnailUrl?: string;
+  teamName?: string;
+  taskTitle?: string;
+  timestamp?: string | number;
 }

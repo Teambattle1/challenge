@@ -1,8 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { PlayerResult, GameTask } from '../types';
-import { fetchGameResults, fetchGameInfo, fetchGameTasks } from '../services/loquizService';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { PlayerResult, GameTask, GamePhoto } from '../types';
+import { fetchGameResults, fetchGameInfo, fetchGameTasks, fetchGamePhotos } from '../services/loquizService';
 import Podium from './Podium';
-import TaskMaster from './TaskMaster'; // Import new component
+import TaskMaster from './TaskMaster';
+import Showtime from './Showtime';
+import LiveToast from './LiveToast';
+import TaskInspector from './TaskInspector';
 import { HouseIcon } from './icons';
 
 interface LoquizResultsProps {
@@ -20,6 +23,19 @@ const LoquizResults: React.FC<LoquizResultsProps> = ({ apiKey, gameId, onBack })
     const [error, setError] = useState<string | null>(null);
     const [revealStep, setRevealStep] = useState(0); 
     const [viewMode, setViewMode] = useState<'ranking' | 'taskmaster'>('ranking'); // View toggle
+
+    // Showtime State
+    const [photos, setPhotos] = useState<GamePhoto[]>([]);
+    const [isShowtimeOpen, setIsShowtimeOpen] = useState(false);
+    const [isLoadingPhotos, setIsLoadingPhotos] = useState(false);
+
+    // Inspector State
+    const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+
+    // Live Event "Webhook" Simulation State
+    const [liveEvent, setLiveEvent] = useState<{ message: string, subtext: string } | null>(null);
+    const totalAnswerCountRef = useRef<number>(0);
+    const isFirstLoadRef = useRef<boolean>(true);
 
     const loadData = useCallback(async (isRefresh = false) => {
         if (!gameId) return;
@@ -43,22 +59,51 @@ const LoquizResults: React.FC<LoquizResultsProps> = ({ apiKey, gameId, onBack })
             
             setResults(data);
 
+            // --- LIVE WEBHOOK SIMULATION ---
+            // Calculate total answers in the system
+            let currentTotalAnswers = 0;
+            data.forEach(team => {
+                currentTotalAnswers += (team.answers?.length || 0);
+            });
+
+            // If not first load, and count increased, show popup
+            if (!isFirstLoadRef.current && currentTotalAnswers > totalAnswerCountRef.current) {
+                const diff = currentTotalAnswers - totalAnswerCountRef.current;
+                setLiveEvent({
+                    message: "INCOMING TRANSMISSION",
+                    subtext: `${diff} NEW ANSWER${diff > 1 ? 'S' : ''} RECEIVED`
+                });
+                
+                // Clear toast after 4s
+                setTimeout(() => setLiveEvent(null), 4000);
+            }
+
+            totalAnswerCountRef.current = currentTotalAnswers;
+            isFirstLoadRef.current = false;
+            // ---------------------------------
+
             if (!isRefresh) {
                 const info = responses[1];
                 let taskList = responses[2] as GameTask[] || [];
 
                 // Fallback: If no tasks returned (API error or empty), generate from results
-                // This ensures TaskMaster still works (showing IDs) even if definition fetch fails
                 if (taskList.length === 0 && data && data.length > 0) {
                      const derivedTasks = new Map<string, GameTask>();
                      data.forEach(team => {
                          team.answers?.forEach(ans => {
                              if (!derivedTasks.has(ans.taskId)) {
-                                 // Try to make a readable title from the ID if possible, otherwise generic
+                                 // IMPROVED FALLBACK: Try to find a real title from raw data
+                                 const raw = ans.raw || {};
+                                 const rawQ = raw.question || {};
+                                 // Check multiple fields where title might be hiding in answer data
+                                 const derivedTitle = rawQ.title || rawQ.text || raw.title || raw.text || `Task ${ans.taskId}`;
+                                 
                                  derivedTasks.set(ans.taskId, {
                                      id: ans.taskId,
-                                     title: `Task ${ans.taskId}`, 
-                                     type: 'unknown'
+                                     title: derivedTitle, 
+                                     intro: undefined,
+                                     type: raw.type || 'unknown',
+                                     raw: raw
                                  });
                              }
                          });
@@ -95,6 +140,17 @@ const LoquizResults: React.FC<LoquizResultsProps> = ({ apiKey, gameId, onBack })
 
     const handleNextReveal = () => {
         setRevealStep(prev => Math.min(prev + 1, 3));
+    };
+
+    const handleShowtimeClick = async () => {
+        setIsShowtimeOpen(true);
+        // Always try to fetch fresh photos when opening
+        if (photos.length === 0) {
+            setIsLoadingPhotos(true);
+            const fetchedPhotos = await fetchGamePhotos(gameId, apiKey);
+            setPhotos(fetchedPhotos);
+            setIsLoadingPhotos(false);
+        }
     };
 
     if (isLoading) {
@@ -138,6 +194,9 @@ const LoquizResults: React.FC<LoquizResultsProps> = ({ apiKey, gameId, onBack })
     return (
         <div className="w-full max-w-full px-2 md:px-4 flex flex-col items-center relative z-10 h-full">
             
+            {/* Live Notification Toast */}
+            {liveEvent && <LiveToast message={liveEvent.message} subtext={liveEvent.subtext} />}
+
             {/* Header Section - Super Compact */}
             <div className="w-full text-center mb-1 relative px-4 mt-2">
                  {/* Top Left House Icon */}
@@ -151,8 +210,24 @@ const LoquizResults: React.FC<LoquizResultsProps> = ({ apiKey, gameId, onBack })
                     </button>
                 </div>
 
-                 {/* Top Right: TaskMaster Toggle AND Refresh */}
+                 {/* Top Right: Controls */}
                  <div className="absolute top-0 right-0 z-20 flex gap-2">
+                    {/* Inspector Button (Debug) */}
+                    <button
+                        onClick={() => setIsInspectorOpen(true)}
+                        className="hidden md:block px-2 py-1.5 md:px-3 md:py-2 rounded-full font-black text-[9px] md:text-[10px] uppercase tracking-widest transition-all backdrop-blur-sm border bg-black/40 text-blue-400 border-blue-500/30 hover:bg-blue-500/20"
+                    >
+                        Inspector
+                    </button>
+
+                    {/* Showtime Button */}
+                    <button
+                        onClick={handleShowtimeClick}
+                        className="px-3 py-1.5 md:px-4 md:py-2 rounded-full font-black text-[10px] md:text-xs uppercase tracking-widest transition-all backdrop-blur-sm border bg-black/40 text-pink-500 border-pink-500/50 hover:bg-pink-500/20 shadow-[0_0_10px_rgba(236,72,153,0.3)]"
+                    >
+                        Showtime
+                    </button>
+
                     {/* TaskMaster Button */}
                     <button 
                         onClick={() => setViewMode(prev => prev === 'ranking' ? 'taskmaster' : 'ranking')}
@@ -293,6 +368,23 @@ const LoquizResults: React.FC<LoquizResultsProps> = ({ apiKey, gameId, onBack })
                 <div className="w-full max-w-[95vw] h-[70vh] glass-panel rounded-xl overflow-hidden border-t-4 border-t-orange-500 flex flex-col mb-4 animate-fade-in">
                     <TaskMaster tasks={tasks} results={results} />
                 </div>
+            )}
+
+            {/* SHOWTIME MODAL */}
+            {isShowtimeOpen && (
+                isLoadingPhotos && photos.length === 0 ? (
+                    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center">
+                        <div className="w-12 h-12 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                        <p className="text-pink-500 font-bold uppercase tracking-widest animate-pulse">Scanning Media Streams...</p>
+                    </div>
+                ) : (
+                    <Showtime photos={photos} onClose={() => setIsShowtimeOpen(false)} />
+                )
+            )}
+
+            {/* INSPECTOR MODAL */}
+            {isInspectorOpen && (
+                <TaskInspector tasks={tasks} results={results || []} onClose={() => setIsInspectorOpen(false)} />
             )}
         </div>
     );
