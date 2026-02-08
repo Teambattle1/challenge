@@ -1,17 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import LoquizResults from './components/LoquizResults';
 import GameListPage from './components/GameListPage';
 import ApiKeyInput from './components/ApiKeyInput';
+import SessionDashboard from './components/SessionDashboard';
+import Showtime from './components/Showtime';
+import TaskMaster from './components/TaskMaster';
+import TaskInspector from './components/TaskInspector';
+import { fetchGameResults, fetchGameTasks, fetchGameInfo, fetchGamePhotos } from './services/loquizService';
+import { PlayerResult, GameTask, GamePhoto } from './types';
+import { HouseIcon } from './components/icons';
 
 // Define the exact allowed view states
-type ViewState = 'login' | 'lobby' | 'results';
+type ViewState = 'login' | 'lobby' | 'dashboard' | 'results' | 'showtime' | 'taskmaster' | 'admin';
 
 // PASTE YOUR API KEY HERE - Leave empty to use manual input
-const HARDCODED_API_KEY: string = "ApiKey-v1 63f6bec47b2cc86eb52ea7d84f2f96e250ab87544074cec8949d5862d368c154"; 
+const HARDCODED_API_KEY: string = "ApiKey-v1 63f6bec47b2cc86eb52ea7d84f2f96e250ab87544074cec8949d5862d368c154";
 
 const App: React.FC = () => {
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
-  
+
   // Initialize key with hardcoded value or from localStorage
   const [apiKey, setApiKey] = useState<string | null>(() => {
     if (HARDCODED_API_KEY && HARDCODED_API_KEY.trim() !== "") {
@@ -20,29 +27,79 @@ const App: React.FC = () => {
     return localStorage.getItem('loquiz_api_key') || null;
   });
 
-  // Use explicit typing for the state to satisfy TS
   const [currentView, setCurrentView] = useState<ViewState>(() => {
     const initialKey = HARDCODED_API_KEY || localStorage.getItem('loquiz_api_key');
     return !initialKey ? 'login' : 'lobby';
   });
 
-  // Sync currentView when state changes
+  // Data state for sub-views
+  const [results, setResults] = useState<PlayerResult[]>([]);
+  const [tasks, setTasks] = useState<GameTask[]>([]);
+  const [photos, setPhotos] = useState<GamePhoto[]>([]);
+  const [dataLoaded, setDataLoaded] = useState(false);
+
+  // Load game data when entering dashboard
+  const loadGameData = useCallback(async (gameId: string, key: string) => {
+    try {
+      const [resultsData, taskList, info, photosData] = await Promise.all([
+        fetchGameResults(gameId, key),
+        fetchGameTasks(gameId, key),
+        fetchGameInfo(gameId, key),
+        fetchGamePhotos(gameId, key),
+      ]);
+      setResults(resultsData);
+      setPhotos(photosData);
+
+      let finalTasks: GameTask[] = taskList.length > 0 ? taskList : [];
+      if (finalTasks.length === 0 && info.tasks && Array.isArray(info.tasks)) {
+        finalTasks = info.tasks.map((t: any) => ({
+          id: t.id,
+          title: t.title || t.name || t.id,
+          type: t.type || 'v4-embedded',
+          raw: t,
+        }));
+      }
+      setTasks(finalTasks);
+      setDataLoaded(true);
+    } catch (err) {
+      console.warn('Failed to preload game data:', err);
+      setDataLoaded(true);
+    }
+  }, []);
+
+  // Sync currentView when login/logout changes
   useEffect(() => {
     if (!apiKey) {
       setCurrentView('login');
-    } else if (selectedGameId) {
-      setCurrentView('results');
-    } else {
+    } else if (!selectedGameId && !['login'].includes(currentView)) {
       setCurrentView('lobby');
     }
-  }, [apiKey, selectedGameId]);
+  }, [apiKey]);
+
+  // Preload data when a game is selected
+  useEffect(() => {
+    if (selectedGameId && apiKey) {
+      setDataLoaded(false);
+      loadGameData(selectedGameId, apiKey);
+    }
+  }, [selectedGameId, apiKey, loadGameData]);
 
   const viewResults = (gameId: string) => {
     setSelectedGameId(gameId);
+    setCurrentView('dashboard');
   };
 
   const goBackToLobby = () => {
     setSelectedGameId(null);
+    setResults([]);
+    setTasks([]);
+    setPhotos([]);
+    setDataLoaded(false);
+    setCurrentView('lobby');
+  };
+
+  const goBackToDashboard = () => {
+    setCurrentView('dashboard');
   };
 
   const handleLogout = () => {
@@ -57,7 +114,7 @@ const App: React.FC = () => {
       localStorage.setItem('loquiz_api_key', apiKey);
     }
   }, [apiKey]);
-  
+
   const handleKeySubmit = (key: string) => {
     setApiKey(key);
   };
@@ -66,7 +123,20 @@ const App: React.FC = () => {
     setApiKey("GUEST");
   };
 
+  const handleNavigate = (view: 'results' | 'showtime' | 'taskmaster' | 'admin') => {
+    setCurrentView(view);
+  };
+
   const isHardcoded = !!(HARDCODED_API_KEY && HARDCODED_API_KEY.trim() !== "");
+
+  // Back button used by sub-views
+  const BackButton = () => (
+    <div className="fixed top-8 left-8 z-50">
+      <button onClick={goBackToDashboard} className="p-3 bg-black/60 hover:bg-orange-600 text-orange-500 hover:text-white rounded-full transition-all border border-orange-500/30 shadow-2xl">
+        <HouseIcon className="w-6 h-6 md:w-8 md:h-8" />
+      </button>
+    </div>
+  );
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 lg:p-8 transition-all duration-500 relative">
@@ -74,22 +144,48 @@ const App: React.FC = () => {
         {currentView === 'login' && (
           <ApiKeyInput onKeySubmit={handleKeySubmit} />
         )}
-        
-        {currentView === 'results' && selectedGameId && (
-          <LoquizResults apiKey={apiKey!} gameId={selectedGameId} onBack={goBackToLobby} />
-        )}
-        
+
         {currentView === 'lobby' && (
-          <GameListPage 
-            apiKey={apiKey!} 
-            onGameSelect={viewResults} 
-            onLogout={isHardcoded ? undefined : handleLogout} 
+          <GameListPage
+            apiKey={apiKey!}
+            onGameSelect={viewResults}
+            onLogout={isHardcoded ? undefined : handleLogout}
           />
         )}
+
+        {currentView === 'dashboard' && selectedGameId && (
+          <SessionDashboard
+            apiKey={apiKey!}
+            gameId={selectedGameId}
+            onBack={goBackToLobby}
+            onNavigate={handleNavigate}
+          />
+        )}
+
+        {currentView === 'results' && selectedGameId && (
+          <LoquizResults apiKey={apiKey!} gameId={selectedGameId} onBack={goBackToDashboard} />
+        )}
+
+        {currentView === 'showtime' && selectedGameId && (
+          <div className="w-full">
+            <Showtime photos={photos} onClose={goBackToDashboard} />
+          </div>
+        )}
+
+        {currentView === 'taskmaster' && selectedGameId && dataLoaded && (
+          <div className="w-full max-w-[98vw] h-[80vh] glass-panel rounded-3xl overflow-hidden border-t-8 border-t-orange-600 flex flex-col shadow-[0_40px_80px_rgba(0,0,0,0.7)] relative">
+            <BackButton />
+            <TaskMaster tasks={tasks} results={results} />
+          </div>
+        )}
+
+        {currentView === 'admin' && selectedGameId && dataLoaded && (
+          <TaskInspector tasks={tasks} results={results} onClose={goBackToDashboard} />
+        )}
       </div>
-      
+
       {currentView === 'login' && !isHardcoded && (
-        <button 
+        <button
           onClick={handleGuestEntry}
           className="absolute bottom-4 text-zinc-600 text-xs hover:text-zinc-400 uppercase tracking-widest transition-colors"
         >
