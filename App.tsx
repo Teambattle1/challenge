@@ -36,6 +36,7 @@ const App: React.FC = () => {
   const [results, setResults] = useState<PlayerResult[]>([]);
   const [tasks, setTasks] = useState<GameTask[]>([]);
   const [photos, setPhotos] = useState<GamePhoto[]>([]);
+  const [gameName, setGameName] = useState<string | null>(null);
   const [dataLoaded, setDataLoaded] = useState(false);
 
   // Load game data when entering dashboard
@@ -49,6 +50,7 @@ const App: React.FC = () => {
       ]);
       setResults(resultsData);
       setPhotos(photosData);
+      setGameName(info.name || null);
 
       let finalTasks: GameTask[] = taskList.length > 0 ? taskList : [];
       if (finalTasks.length === 0 && info.tasks && Array.isArray(info.tasks)) {
@@ -94,6 +96,7 @@ const App: React.FC = () => {
     setResults([]);
     setTasks([]);
     setPhotos([]);
+    setGameName(null);
     setDataLoaded(false);
     setCurrentView('lobby');
   };
@@ -140,49 +143,59 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 lg:p-8 transition-all duration-500 relative">
-      <div className="w-full max-w-6xl flex items-center justify-center z-10 my-auto">
-        {currentView === 'login' && (
-          <ApiKeyInput onKeySubmit={handleKeySubmit} />
-        )}
+      {/* Contained views (login, lobby, dashboard) */}
+      {(currentView === 'login' || currentView === 'lobby' || currentView === 'dashboard') && (
+        <div className="w-full max-w-6xl flex items-center justify-center z-10 my-auto">
+          {currentView === 'login' && (
+            <ApiKeyInput onKeySubmit={handleKeySubmit} />
+          )}
 
-        {currentView === 'lobby' && (
-          <GameListPage
-            apiKey={apiKey!}
-            onGameSelect={viewResults}
-            onLogout={isHardcoded ? undefined : handleLogout}
-          />
-        )}
+          {currentView === 'lobby' && (
+            <GameListPage
+              apiKey={apiKey!}
+              onGameSelect={viewResults}
+              onLogout={isHardcoded ? undefined : handleLogout}
+            />
+          )}
 
-        {currentView === 'dashboard' && selectedGameId && (
-          <SessionDashboard
-            apiKey={apiKey!}
-            gameId={selectedGameId}
-            onBack={goBackToLobby}
-            onNavigate={handleNavigate}
-          />
-        )}
+          {currentView === 'dashboard' && selectedGameId && (
+            <SessionDashboard
+              apiKey={apiKey!}
+              gameId={selectedGameId}
+              gameName={gameName}
+              results={results}
+              photos={photos}
+              onBack={goBackToLobby}
+              onNavigate={handleNavigate}
+            />
+          )}
+        </div>
+      )}
 
-        {currentView === 'results' && selectedGameId && (
+      {/* Full-width views (results, taskmaster) */}
+      {currentView === 'results' && selectedGameId && (
+        <div className="w-full flex items-center justify-center z-10 my-auto">
           <LoquizResults apiKey={apiKey!} gameId={selectedGameId} onBack={goBackToDashboard} />
-        )}
+        </div>
+      )}
 
-        {currentView === 'showtime' && selectedGameId && (
-          <div className="w-full">
-            <Showtime photos={photos} onClose={goBackToDashboard} />
-          </div>
-        )}
-
-        {currentView === 'taskmaster' && selectedGameId && dataLoaded && (
-          <div className="w-full max-w-[98vw] h-[80vh] glass-panel rounded-3xl overflow-hidden border-t-8 border-t-orange-600 flex flex-col shadow-[0_40px_80px_rgba(0,0,0,0.7)] relative">
-            <BackButton />
+      {currentView === 'taskmaster' && selectedGameId && dataLoaded && (
+        <div className="w-full max-w-[98vw] z-10 my-auto">
+          <BackButton />
+          <div className="h-[85vh] glass-panel rounded-3xl overflow-hidden border-t-8 border-t-orange-600 flex flex-col shadow-[0_40px_80px_rgba(0,0,0,0.7)]">
             <TaskMaster tasks={tasks} results={results} />
           </div>
-        )}
+        </div>
+      )}
 
-        {currentView === 'admin' && selectedGameId && dataLoaded && (
-          <TaskInspector tasks={tasks} results={results} onClose={goBackToDashboard} />
-        )}
-      </div>
+      {/* Fullscreen overlay views (showtime, admin) */}
+      {currentView === 'showtime' && selectedGameId && (
+        <Showtime photos={photos} onClose={goBackToDashboard} />
+      )}
+
+      {currentView === 'admin' && selectedGameId && dataLoaded && (
+        <TaskInspector tasks={tasks} results={results} onClose={goBackToDashboard} />
+      )}
 
       {currentView === 'login' && !isHardcoded && (
         <button
