@@ -4,6 +4,9 @@
 
 2026-loquiz-results — En React-applikation til at vise spilresultater og ranglister fra Loquiz med festlig podium-reveal, task-analyse, fotogalleri og live-opdateringer.
 
+- **Repository:** https://github.com/Teambattle1/Loquiz-challenge
+- **Live:** https://games.eventday.dk
+
 ## Kommandoer
 
 - `npm run dev` — Start udviklingsserver (port 3000)
